@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simple Chat</title>
+  <style>
+    #video-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.6/peerjs.min.js"></script>
+</head>
+<body>
+  <div id="video-grid"></div>
+
+<script>
+  const videoGrid = document.getElementById('video-grid')
+  const socket = io('/')
+  const peer = new Peer({
+    host: '/',
+    port: '8080',
+    path: '/peer' // 掛載到 peer server 的位置
+  })
+  const peerCalls = {}
+  let myStream; // 儲存我的視訊
+
+  peer.on('open', (id) => {
+    // new user id ec436d21-abae-4ee8-90de-2fc52bdab76d
+    socket.emit('join-room', id)
+  })
+
+  // 當被其他用戶 call 的時候
+  peer.on('call', (call) => {
+    // 回傳我的視訊
+    call.answer(myStream)
+    // 當收到 call 時，我們也需要把打給我們的人的視訊顯示出來
+    const video = document.createElement('video')
+    call.on('stream', (callerStream) => {
+      addVideoStream(video, callerStream)
+    })
+    // 當 caller 離線時把他的視訊移除
+    call.on('close', () => video.remove())
+    // 注意！！這一步是影片中沒有提到的關鍵點，被 call 的人也必須把 caller 的 id 存起來
+    // caller id 在 call.peer 當中
+    // 如果沒有這一步，新加入的用戶在舊用戶離開時視訊就會卡在那，因為新用戶的 peerCalls 裡面並不存在舊用戶的 userId，也就不會觸發 call.close 導致視訊停住
+    peerCalls[call.peer] = call
+  })
+
+  // 初始化
+  ;(async () => {
+    const myVideo = document.createElement('video')
+    myVideo.muted = true // 我們自己不需要聽到自己的 video 聲音
+    // 取得本地視訊 stream
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: false
+    })
+    myStream = stream
+    addVideoStream(myVideo, stream)
+
+    // 被通知有新用戶時，對新用戶發起連線 call，並將自己的視訊傳給新用戶
+    socket.on('user-connected', (userId) => {
+      const call = peer.call(userId, stream)
+      const video = document.createElement('video')
+      // 當對方（這邊是該新連線用戶）回傳他的 stream 給我們時
+      call.on('stream', (remoteStream) => {
+        addVideoStream(video, remoteStream)
+      })
+      // 當新用戶離線時
+      call.on('close', () => video.remove())
+      // 儲存新用戶的 call
+      peerCalls[userId] = call
+    })
+
+    // detect when a user leave, close the call with
+    socket.on('user-disconnected', (userId) => {
+      const leaveCall = peerCalls[userId]
+      leaveCall && leaveCall.close()
+    })
+  })()
+
+  function addVideoStream(video, stream) {
+    video.srcObject = stream
+    video.onloadedmetadata = () => video.play()
+    videoGrid.append(video)
+  }
+</script>
+</body>
+</html>
